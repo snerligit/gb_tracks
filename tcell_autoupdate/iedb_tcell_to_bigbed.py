@@ -59,38 +59,58 @@ def get_args():
     parser = argparse.ArgumentParser(description="Method download T cell epitopes from IEDB and convert to bigbed file")
     parser.add_argument("-path", help="path where csv file will be downloaded")
     parser.add_argument("-csv", help="csv file name of the T cell epitope file donwloaded from IEDB", default="tcell_full_v3.csv")
-    parser.add_argument("-pid", help="pep to number", default="prot_names_pids_8.txt")
+    parser.add_argument("-hgtable", help="hgtable downloaded from genome browser", default="hgTables.txt")
     parser.add_argument("-gb_tools", help="path to gb_tools", default="./")
     args = parser.parse_args()
 
     return args
 
-# method to read the peptide id, chromosome numbering file
-def read_pid(args):
+# method to read hgtable obtained from genome browser,
+# on the browser, go to Tools,
+# select clade: Viruses, genome: SARS-CoV-2, group: UniProt Protein Annotations
+# track: Precurs. Proteins, output format: selected fields from primary and related tables
+# then click get output
+# from a new form, select chrom, chromStart, chromEnd, uniprotName and refSeqProt and
+# then click get output
+# currently, there are discrepancies between chromosome end numbers between hgTable
+# and NCBI entry. So, I download this table and update it so that it matches
+# with that of the NCBI entry.
+def read_hg_table(args):
 
-    inputfilehandler = open(args.pid, 'r')
-    pid = {}
-    aaid = {}
-    nucid = {}
+    chromStart = {}
+    chromEnd = {}
+    prot_name = {}
+    sequence = {}
+    inputfilehandler = open(args.hgtable, 'r')
     for line in inputfilehandler:
-        line = line.strip()
+        line = line.rstrip()
         fields = line.split()
-        peptide = fields[0]
-        pid[peptide] = fields[1]
-        nucid[peptide] = fields[2]
-        aaid[peptide] = fields[3]
-    inputfilehandler.close()
+        if len(fields) > 0:
+            if "#" not in line:
+                chrom = fields[0]
+                refseq = fields[len(fields)-2]
+                chromStart[refseq] = fields[1]
+                chromEnd[refseq] = fields[2]
+                prot_name[refseq] = fields[3:len(fields)-2]
+                sequence[refseq] = fields[len(fields)-1]
 
-    return (pid, aaid, nucid)
+    inputfilehandler.close()
+    return chromStart, chromEnd, prot_name, sequence
 
 # method to read the position of the given peptide
-def get_start_pos(peptide, pid, aaid, nucid):
+def get_start_pos(peptide, chromStart, prot_seq):
 
-    first_eight = ''.join(list(peptide)[0:8])
-    if first_eight in pid:
-        return nucid[first_eight]
+    pid_of_interest = ''
+    idx_of_interest = -1
+    for pid in prot_seq:
+        sequence = prot_seq[pid]
+        index = sequence.find(peptide)
+        if index != -1:
+            idx_of_interest = (index*3) + int(chromStart[pid])
+            pid_of_interest = pid
+            break
 
-    return -1
+    return pid_of_interest, idx_of_interest
 
 # method to get the last field from a url
 # this is required since some of the fields in the
@@ -198,7 +218,8 @@ def main(args):
     alleptiopes = read_csv(args.path+'/'+args.csv)
     # get the starting and ending positions of nucleotides, peptides in
     # the SARS-CoV-2 genome
-    (pid, aaid, nucid) = read_pid(args)
+    chromStartList, chromEndList, prot_name, prot_seq = read_hg_table(args)
+
     # fetch the file tag which will be used
     # to create beddetail, bed and bb files with same name
     outfiletag = args.csv.split('.csv')[0]
@@ -218,15 +239,15 @@ def main(args):
     for a in alleptiopes:
         chrom = "NC_045512v2"
         peptide = a
-        chromStart = get_start_pos(peptide, pid, aaid, nucid)
+        pid_of_interest, chromStart = get_start_pos(peptide, chromStartList, prot_seq)
         if chromStart != -1:
             chromEnd = str(len(list(peptide))*3+int(chromStart))
             reserved = 0
             name = peptide
             score = 1000
             strand = '+'
-            thickStart = chromStart
-            thickEnd = chromEnd
+            thickStart = str(chromStart)
+            thickEnd = str(chromEnd)
 
             beddetailfilehandler.write(chrom+'\t'+
                     str(chromStart)+'\t'+
