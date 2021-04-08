@@ -17,21 +17,21 @@ import argparse
 '''
 Command to run this script (I have tested it with python3):
 
-python3 iedb_tcell_to_bigbed.py -path <path where T cell epitopes from IEDB are downloaded and bigbed file is created> -gb_tools <path to gb tools>
+python3 iedb_bcell_to_bigbed.py -path <path where B cell epitopes from IEDB are downloaded and bigbed file is created> -gb_tools <path to gb tools>
 
 '''
 
-# method to download the T cell eptiopes from IEDB webserver
-def download_tcell_epitopes(dir):
+# method to download the B cell eptiopes from IEDB webserver
+def download_bcell_epitopes(dir):
 
-    # All the t-cell epitopes
-    # are available at: https://www.iedb.org/downloader.php?file_name=doc/tcell_full_v3.zip
-    # download this file and filter only the t-cell epitopes relevant for SARS-CoV-2
-    print ("Downloading T cell epitope file from IEDB with wget module...")
+    # All the B-cell epitopes
+    # are available at: https://www.iedb.org/downloader.php?file_name=doc/bcell_full_v3.zip
+    # download this file and filter only the b-cell epitopes relevant for SARS-CoV-2
+    print ("Downloading B cell epitope file from IEDB with wget module...")
 
-    zip = "tcell_epitopes_iedb.zip"
+    zip = "bcell_epitopes_iedb.zip"
     target_file = dir+'/'+zip
-    url = "https://www.iedb.org/downloader.php?file_name=doc/tcell_full_v3.zip"
+    url = "https://www.iedb.org/downloader.php?file_name=doc/bcell_full_v3.zip"
     # If we dont use this we will get a SSL certificate verification error
     ssl._create_default_https_context = ssl._create_unverified_context
     # donwload the zip file
@@ -56,41 +56,124 @@ def get_args():
     Parse command line arguments
     """
 
-    parser = argparse.ArgumentParser(description="Method download T cell epitopes from IEDB and convert to bigbed file")
+    parser = argparse.ArgumentParser(description="Method download B cell epitopes from IEDB and convert to bigbed file")
     parser.add_argument("-path", help="path where csv file will be downloaded")
-    parser.add_argument("-csv", help="csv file name of the T cell epitope file donwloaded from IEDB", default="tcell_full_v3.csv")
-    parser.add_argument("-pid", help="pep to number", default="prot_names_pids_8.txt")
+    parser.add_argument("-csv", help="csv file name of the B cell epitope file donwloaded from IEDB", default="bcell_full_v3.csv")
+    parser.add_argument("-hgtable", help="hgtable downloaded from genome browser", default="hgTables.txt")
     parser.add_argument("-gb_tools", help="path to gb_tools", default="./")
     args = parser.parse_args()
 
     return args
 
-# method to read the peptide id, chromosome numbering file
-def read_pid(args):
+# method to read hgtable obtained from genome browser,
+# on the browser, go to Tools,
+# select clade: Viruses, genome: SARS-CoV-2, group: UniProt Protein Annotations
+# track: Precurs. Proteins, output format: selected fields from primary and related tables
+# then click get output
+# from a new form, select chrom, chromStart, chromEnd, uniprotName and refSeqProt and
+# then click get output
+# currently, there are discrepancies between chromosome end numbers between hgTable
+# and NCBI entry. So, I download this table and update it so that it matches
+# with that of the NCBI entry.
+def read_hg_table(args):
 
-    inputfilehandler = open(args.pid, 'r')
-    pid = {}
-    aaid = {}
-    nucid = {}
+    chromStart = {}
+    chromEnd = {}
+    prot_name = {}
+    sequence = {}
+    pids = {}
+    inputfilehandler = open(args.hgtable, 'r')
     for line in inputfilehandler:
-        line = line.strip()
+        line = line.rstrip()
         fields = line.split()
-        peptide = fields[0]
-        pid[peptide] = fields[1]
-        nucid[peptide] = fields[2]
-        aaid[peptide] = fields[3]
-    inputfilehandler.close()
+        if len(fields) > 0:
+            if "#" not in line:
+                chrom = fields[0]
+                refseq = fields[len(fields)-2]
+                chromStart[refseq] = fields[1]
+                chromEnd[refseq] = fields[2]
+                prot_name[refseq] = fields[3:len(fields)-2]
+                pids[refseq] = fields[len(fields)-2]
+                sequence[refseq] = fields[len(fields)-1]
 
-    return (pid, aaid, nucid)
+    inputfilehandler.close()
+    return chromStart, chromEnd, prot_name, pids, sequence
 
 # method to read the position of the given peptide
-def get_start_pos(peptide, pid, aaid, nucid):
+def get_start_pos(peptide, chromStart, prot_seq):
 
-    first_eight = ''.join(list(peptide)[0:8])
-    if first_eight in pid:
-        return nucid[first_eight]
+    pid_of_interest = ''
+    idx_of_interest = -1
+    for pid in prot_seq:
+        sequence = prot_seq[pid]
+        index = sequence.find(peptide)
+        if index != -1:
+            idx_of_interest = index*3 + int(chromStart[pid])
+            pid_of_interest = pid
+            break
 
-    return -1
+    return pid_of_interest, idx_of_interest
+
+def fetch_pid(prot_name, prot_name_for_epitope, parent_prot_name):
+
+    temp = prot_name_for_epitope
+    if "Spike" in temp:
+        temp = "surface glycoprotein"
+    for p in prot_name:
+        print (p, temp)
+        if p in temp:
+            return prot_name[p]
+
+    temp = parent_prot_name
+    if "Spike" in temp:
+        temp = "surface glycoprotein"
+    for p in prot_name:
+        print (p, temp)
+        if p in temp:
+            return prot_name[p]
+
+    return ''
+
+def get_start_pos_discont(peptide, chromStartList, epitopesource):
+
+    aas = peptide.split(',')
+    aalist = []
+    for a in aas:
+        try:
+            cleana = re.sub('\s+', '', a)
+            aalist.append(int(''.join(list(cleana)[1:])))
+        except:
+            continue
+
+    start = 0
+    if "surface glycoprotein" in epitopesource:
+        start = 21562
+
+    stretches_of_aa = []
+    tuples = []
+    for aa in aalist:
+        if len(stretches_of_aa) == 0:
+            stretches_of_aa.append(aa)
+        else:
+            if stretches_of_aa[len(stretches_of_aa)-1] == aa-1:
+                stretches_of_aa.append(aa)
+            else:
+                chromStart = start + stretches_of_aa[0]*3
+                length = len(stretches_of_aa)*3
+                #tuples.append((chromStart, length))
+                tuples.append(chromStart)
+                tuples.append(length)
+                stretches_of_aa = []
+                stretches_of_aa.append(aa)
+
+    if len(stretches_of_aa) > 0:
+        chromStart = start + stretches_of_aa[0]*3
+        length = len(stretches_of_aa)*3
+        #tuples.append((chromStart, length))
+        tuples.append(chromStart)
+        tuples.append(length)
+
+    return tuples
 
 # method to get the last field from a url
 # this is required since some of the fields in the
@@ -115,6 +198,7 @@ def read_csv(csv):
     max_epitope_index = 0
     mhc_name = 0
     assay_type = 0
+    antibody = 0
     # fetch the indices of fields related to epitope, mhc and the assay information
     for i in range(0, len(fields)):
         if fields[i] == "Epitope":
@@ -126,6 +210,8 @@ def read_csv(csv):
             important_epitope_fields_index['alleleName'] = i
         if fields[i] == "Assay" and assay_type == 0:
             assay_type = i
+        if fields[i] == "Antibody" and antibody == 0:
+            antibody = i
 
     # scan for another set of headers to get specific information
     # given as conditions in the if and elif statements
@@ -167,38 +253,51 @@ def read_csv(csv):
             break
         i += 1
 
+    # get antibody name
+    i = 0
+    while True:
+        if "Antibody Name" in fields[antibody+i]:
+            important_epitope_fields_index['antibodyName'] = antibody+i
+            break
+        i += 1
+
 
     # create a dictionary containing beddetail formatted fields
     # for each epitope from the tcell_full_v3.csv file for
     # SARS-CoV-2 organism
     count = 0
     alleptiopes = {}
+    epitopetype = {}
+    epitopesource = {}
     for line in inputfilehandler:
-        newline = line.replace('\"', '')
-        cleanline = re.sub(r"\s+", ' ', newline)
-        fields = cleanline.split(',')
+        cleanline = re.sub(r"\s+", ' ', line)
+        tempfields = cleanline.split(',\"')
+        fields = re.sub(r"\"", '', "_".join(tempfields)).split('_')
         if "Severe acute respiratory syndrome coronavirus 2" in fields[important_epitope_fields_index['organismName']]:
-            attachstring = get_field_from_url(fields[important_epitope_fields_index['epitopeID']]) + '\t' + fields[important_epitope_fields_index['epitopeType']] + '\t' + fields[important_epitope_fields_index['aaStartPos']] + '\t' + fields[important_epitope_fields_index['aaEndPos']] + '\t' + fields[important_epitope_fields_index['antigenName']] + '\t' + get_field_from_url(fields[important_epitope_fields_index['antigenAccession']]) + '\t' + fields[important_epitope_fields_index['parentProtein']] + '\t' + get_field_from_url(fields[important_epitope_fields_index['parentProteinAccession']]) + '\t' + fields[important_epitope_fields_index['organismName']] + '\t' + fields[important_epitope_fields_index['parentOrganism']] + '\t' + get_field_from_url(fields[important_epitope_fields_index['parentOrganismID']]) + '\t' + fields[important_epitope_fields_index['epitopeComments']] + '\t' + fields[important_epitope_fields_index['alleleName']] + '\t' + get_field_from_url(fields[important_epitope_fields_index['assayType']])
+            attachstring = get_field_from_url(fields[important_epitope_fields_index['epitopeID']]) + '\t' + fields[important_epitope_fields_index['epitopeType']] + '\t' + fields[important_epitope_fields_index['aaStartPos']] + '\t' + fields[important_epitope_fields_index['aaEndPos']] + '\t' + fields[important_epitope_fields_index['antigenName']] + '\t' + get_field_from_url(fields[important_epitope_fields_index['antigenAccession']]) + '\t' + fields[important_epitope_fields_index['parentProtein']] + '\t' + get_field_from_url(fields[important_epitope_fields_index['parentProteinAccession']]) + '\t' + fields[important_epitope_fields_index['organismName']] + '\t' + fields[important_epitope_fields_index['parentOrganism']] + '\t' + get_field_from_url(fields[important_epitope_fields_index['parentOrganismID']]) + '\t' + fields[important_epitope_fields_index['epitopeComments']] + '\t' + get_field_from_url(fields[important_epitope_fields_index['assayType']] + '\t' + fields[important_epitope_fields_index['antibodyName']])
 
             if fields[important_epitope_fields_index['epitopeName']] not in alleptiopes:
+                epitopesource[fields[important_epitope_fields_index['epitopeName']]] = fields[important_epitope_fields_index['antigenName']]
+                epitopetype[fields[important_epitope_fields_index['epitopeName']]] = fields[important_epitope_fields_index['epitopeType']]
                 alleptiopes[fields[important_epitope_fields_index['epitopeName']]] = attachstring
 
     #for a in alleptiopes:
     #    print (a, alleptiopes[a])
     inputfilehandler.close()
 
-    return alleptiopes
+    return alleptiopes, epitopetype, epitopesource
 
 # main method
 def main(args):
 
-    # download the tcell epitopes from IEDB
-    download_tcell_epitopes(args.path)
+    # download the bcell epitopes from IEDB
+    download_bcell_epitopes(args.path)
     # read and filter the tcell epitope csv file
-    alleptiopes = read_csv(args.path+'/'+args.csv)
+    alleptiopes, epitopetype, epitopesource = read_csv(args.path+'/'+args.csv)
     # get the starting and ending positions of nucleotides, peptides in
     # the SARS-CoV-2 genome
-    (pid, aaid, nucid) = read_pid(args)
+    chromStartList, chromEndList, prot_name, pids, prot_seq = read_hg_table(args)
+
     # fetch the file tag which will be used
     # to create beddetail, bed and bb files with same name
     outfiletag = args.csv.split('.csv')[0]
@@ -218,15 +317,15 @@ def main(args):
     for a in alleptiopes:
         chrom = "NC_045512v2"
         peptide = a
-        chromStart = get_start_pos(peptide, pid, aaid, nucid)
-        if chromStart != -1:
+        if epitopetype[a] == "Linear peptide":
+            pid_of_interest, chromStart = get_start_pos(peptide, chromStartList, prot_seq)
             chromEnd = str(len(list(peptide))*3+int(chromStart))
             reserved = 0
             name = peptide
             score = 1000
             strand = '+'
-            thickStart = chromStart
-            thickEnd = chromEnd
+            thickStart = str(chromStart)
+            thickEnd = str(chromEnd)
 
             beddetailfilehandler.write(chrom+'\t'+
                     str(chromStart)+'\t'+
@@ -238,6 +337,21 @@ def main(args):
                     thickEnd+'\t'+
                     str(reserved)+'\t'+
                     alleptiopes[a]+"\n")
+        else:
+            chromPos = get_start_pos_discont(peptide, chromStartList, epitopesource[a])
+            reserved = 0
+            name = peptide
+            score = 1000
+            strand = '+'
+
+            beddetailfilehandler.write(chrom+'\t'+
+                    str(chromPos)+'\t'+
+                    name+'\t'+
+                    str(score)+'\t'+
+                    strand+'\t'+
+                    str(reserved)+'\t'+
+                    alleptiopes[a]+"\n")
+
 
     beddetailfilehandler.close()
 
