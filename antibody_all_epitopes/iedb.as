@@ -14,6 +14,6 @@ table iedb
    string antigenName;  "Antigen name"
    string antigenAccession; "Antigen accession"
    string organismName; "Organism Name"
-   string alleleName; "MHC Allele"
    string assayType; "Assay Type"
+   string antibodyName; "Antibody Name"
    )
