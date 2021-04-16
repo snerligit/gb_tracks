@@ -71,6 +71,9 @@ def main(args):
     #print (cd8_epitopes['Mutant Sequence 1'])
     #print (cd8_epitopes['Mutant Sequence 2'])
 
+    wt_mt = defaultdict(list)
+    mutations = []
+
     beddetailfilehandler = open(beddetailfilename, 'w')
     for i in range(0, len(cd8_epitopes['Position of Mutation'])):
 
@@ -84,6 +87,9 @@ def main(args):
         aa_change = cd8_epitopes['AA Change'][i]
         c_change = cd8_epitopes['Codon Change'][i]
 
+        if gene+'_'+c_change+'_'+aa_change not in mutations:
+            mutations.append(gene+'_'+c_change+'_'+aa_change)
+
         if ';' not in cd8_epitopes['Wildtype Sequence'][i]:
             chromStart = get_start_pos(cd8_epitopes['Wildtype Sequence'][i], pid, aaid, nucid)
             if chromStart != -1:
@@ -92,6 +98,12 @@ def main(args):
                 thickEnd = str(chromEnd)
                 wt_pep = cd8_epitopes['Wildtype Sequence'][i]
                 mt_pep = cd8_epitopes['Mutant Sequence 1'][i]
+
+                if wt_pep not in wt_mt:
+                    wt_mt[wt_pep].append(mt_pep)
+                else:
+                    if mt_pep in wt_mt[wt_pep]:
+                        continue
 
                 beddetailfilehandler.write(chrom+'\t'+
                         str(chromStart)+'\t'+
@@ -120,6 +132,12 @@ def main(args):
                 thickStart = chromStart
                 thickEnd = chromEnd
 
+                if wt1_pep not in wt_mt:
+                    wt_mt[wt_pep].append(mt_pep)
+                else:
+                    if mt1_pep in wt_mt[wt1_pep]:
+                        continue
+
                 beddetailfilehandler.write(chrom+'\t'+
                         str(chromStart)+'\t'+
                         str(chromEnd)+'\t'+
@@ -141,6 +159,12 @@ def main(args):
                 thickStart = chromStart
                 thickEnd = chromEnd
 
+                if wt2_pep not in wt_mt:
+                    wt_mt[wt_pep].append(mt_pep)
+                else:
+                    if mt2_pep in wt_mt[wt2_pep]:
+                        continue
+
                 beddetailfilehandler.write(chrom+'\t'+
                         str(chromStart)+'\t'+
                         str(chromEnd)+'\t'+
@@ -158,6 +182,7 @@ def main(args):
 
 
     beddetailfilehandler.close()
+    print (len(mutations))
 
     # use gbtools to convert from beddetail to bed and bigbed
     os.system(f"{args.gb_tools}/bedSort {beddetailfilename} {bedfilename}")
